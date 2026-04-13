@@ -1,0 +1,26 @@
+// Mind memory nudge — fires [MIND] after responses to REAL user messages only.
+// Skips system-generated messages (sub-agent completions, background task notifications).
+//
+// Flow:
+// 1. Stop hook fires on session.idle
+// 2. Check lock file → if exists, this is the second fire (cleanup), exit 0
+// 3. Check if last user message was system-generated:
+//    a. Claude Code: read transcript_path, check last entries
+//    b. OpenCode/OmO: query opencode.db for last user part
+//    c. If system-generated → exit 0 (skip nudge)
+// 4. Real user turn → create lock, block with [MIND]
+// 5. Agent evaluates and responds → Stop fires again → lock cleanup → session idles
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(cat); sid=$(echo \"$input\" | sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p'); [ -z \"$sid\" ] && exit 0; lock=\"/tmp/mind-stop-${sid}.lock\"; if [ -f \"$lock\" ]; then rm -f \"$lock\"; exit 0; fi; tp=$(echo \"$input\" | sed -n 's/.*\"transcript_path\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p'); if [ -n \"$tp\" ] && [ -f \"$tp\" ]; then tail -5 \"$tp\" | grep -q 'OMO_INTERNAL_INITIATOR\\|system-reminder' && exit 0; fi; db=\"${HOME}/.local/share/opencode/opencode.db\"; if [ -f \"$db\" ] && command -v sqlite3 >/dev/null 2>&1; then last=$(sqlite3 \"$db\" \"SELECT p.data FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id='${sid}' AND json_extract(m.data, '$.role')='user' ORDER BY p.time_created DESC LIMIT 1;\" 2>/dev/null); case \"$last\" in *system-reminder*|*OMO_INTERNAL_INITIATOR*) exit 0 ;; esac; fi; touch \"$lock\"; printf '{\"decision\":\"block\",\"reason\":\"[MIND] Dispatch mind-curator with what happened this turn. After your summary, include your complete response to the user under a RESPONSE heading.\"}'"
+          }
+        ]
+      }
+    ]
+  }
+}
